@@ -22,6 +22,9 @@ class EKycResponse(BaseModel):
     address: AddressDetails
     photo_base64: Optional[str] = None
 
-class login(BaseModel):
+class login1(BaseModel):
     id:str
     password:str
+class login2(BaseModel):
+    id:str
+    otp:str

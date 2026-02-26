@@ -245,5 +245,19 @@ async def verify(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/registration/data")
+async def data()
+
 @app.get("/login")
 def login()
+
+@app.post
+
+@app.get("/contractor/attendance")
+
+@app.post("/contractor/change-attendace")
+
+@app.post("/contractor/add-project")
+
+@app.post("/contractor/add-labour")
+
