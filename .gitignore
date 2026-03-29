@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+__pycache__/
+Backend/__pycache__/
+Backend/db_data/
+backdate_commits.ps1
