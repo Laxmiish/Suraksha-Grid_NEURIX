@@ -13,13 +13,15 @@ import (
 
 var commonDB *sql.DB
 var contractorDB *sql.DB
+var homeLaborDB *sql.DB
 
 func main() {
 	var err error
 	username, password, host := "root", "root", "127.0.0.1"
 	
 	dsn1 := fmt.Sprintf("%s:%s@tcp(%s:3306)/common_db?parseTime=true", username, password, host)
-	dsn2 := fmt.Sprintf("%s:%s@tcp(%s:3306)/contractors_master?parseTime=true", username, password, host)
+	dsn2 := fmt.Sprintf("%s:%s@tcp(%s:3308)/contractors_master?parseTime=true", username, password, host)
+	dsn3 := fmt.Sprintf("%s:%s@tcp(%s:3307)/home_labor_db?parseTime=true", username, password, host)
 
 	commonDB, err = sql.Open("mysql", dsn1)
 	if err != nil || commonDB.Ping() != nil { log.Fatal("Common DB failed:", err) }
@@ -28,6 +30,10 @@ func main() {
 	contractorDB, err = sql.Open("mysql", dsn2)
 	if err != nil || contractorDB.Ping() != nil { log.Fatal("Contractor DB failed:", err) }
 	defer contractorDB.Close()
+
+	homeLaborDB, err = sql.Open("mysql", dsn3)
+	if err != nil || homeLaborDB.Ping() != nil { log.Fatal("Home Labor DB failed:", err) }
+	defer homeLaborDB.Close()
 
 	c := cron.New()
 	c.AddFunc("0 0 * * *", runDailyAttendancePulse)
@@ -39,6 +45,9 @@ func main() {
 	r.POST("/login", loginHandler)
 	r.GET("/worker/benefits/:ref_id", getEligibleBenefits)
 	r.POST("/contractor/mark-absent", markAbsent)
+	r.GET("/worker/union-history/:ref_id", getUnionHistory)
+	r.GET("/worker/labour-boards/:ref_id", getLabourBoards)
+	r.GET("/worker/profile/:ref_id", getWorkerProfile)
 
 	log.Println("Go Engine running intensely on port 8080")
 	r.Run(":8080")
@@ -146,6 +155,77 @@ func markAbsent(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "Marked Absent"})
+}
+
+// 5. Union History from Home Labor DB
+func getUnionHistory(c *gin.Context) {
+	refID := c.Param("ref_id")
+	query := `SELECT union_name, state, from_date, to_date, benefit_summary, status FROM union_memberships WHERE worker_reference_id=? ORDER BY id`
+	rows, err := homeLaborDB.Query(query, refID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch union history"})
+		return
+	}
+	defer rows.Close()
+	var unions []map[string]interface{}
+	for rows.Next() {
+		var name, state, from, to, benefit, status string
+		rows.Scan(&name, &state, &from, &to, &benefit, &status)
+		unions = append(unions, map[string]interface{}{
+			"union_name": name, "state": state, "from": from, "to": to,
+			"benefit_summary": benefit, "status": status,
+		})
+	}
+	if unions == nil { unions = []map[string]interface{}{} }
+	c.JSON(http.StatusOK, gin.H{"unions": unions})
+}
+
+// 6. Labour Board Registrations from Home Labor DB
+func getLabourBoards(c *gin.Context) {
+	refID := c.Param("ref_id")
+	query := `SELECT board_name, short_name, state, reg_number, from_date, to_date, status, contributions, contact, website, cert_status FROM labour_board_registrations WHERE worker_reference_id=? ORDER BY id`
+	rows, err := homeLaborDB.Query(query, refID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch labour boards"})
+		return
+	}
+	defer rows.Close()
+	var boards []map[string]interface{}
+	for rows.Next() {
+		var boardName, shortName, state, regNum, from, to, status, contrib, contact, website, certStatus string
+		rows.Scan(&boardName, &shortName, &state, &regNum, &from, &to, &status, &contrib, &contact, &website, &certStatus)
+		boards = append(boards, map[string]interface{}{
+			"board_name": boardName, "short_name": shortName, "state": state,
+			"reg_number": regNum, "from": from, "to": to, "status": status,
+			"contributions": contrib, "contact": contact, "website": website,
+			"cert_status": certStatus,
+		})
+	}
+	if boards == nil { boards = []map[string]interface{}{} }
+	c.JSON(http.StatusOK, gin.H{"labour_boards": boards})
+}
+
+// 7. Worker Profile (cross-DB: user info from commonDB + days worked from contractorDB)
+func getWorkerProfile(c *gin.Context) {
+	refID := c.Param("ref_id")
+	var name, dob, gender, state, phone, email, role string
+	var rating int
+	query := `SELECT name, dob, gender, state, phone, email, role, rating FROM users WHERE reference_id=?`
+	err := commonDB.QueryRow(query, refID).Scan(&name, &dob, &gender, &state, &phone, &email, &role, &rating)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Worker not found"})
+		return
+	}
+	// Get total days worked
+	var totalDays int
+	daysQuery := `SELECT COUNT(*) FROM attendance_logs WHERE worker_reference_id=? AND status='PRESENT'`
+	contractorDB.QueryRow(daysQuery, refID).Scan(&totalDays)
+
+	c.JSON(http.StatusOK, gin.H{
+		"reference_id": refID, "name": name, "dob": dob, "gender": gender,
+		"state": state, "phone": phone, "email": email, "role": role,
+		"rating": rating, "total_days_worked": totalDays,
+	})
 }
 
 func runDailyAttendancePulse() {
