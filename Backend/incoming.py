@@ -130,3 +130,15 @@ async def login(credentials: basemodels.LoginRequest):
 @app.get("/api/worker/benefits/{reference_id}")
 async def get_worker_benefits(reference_id: str):
     return await go_microservice_request("GET", f"/worker/benefits/{reference_id}")
+
+@app.get("/api/worker/union-history/{reference_id}")
+async def get_union_history(reference_id: str):
+    return await go_microservice_request("GET", f"/worker/union-history/{reference_id}")
+
+@app.get("/api/worker/labour-boards/{reference_id}")
+async def get_labour_boards(reference_id: str):
+    return await go_microservice_request("GET", f"/worker/labour-boards/{reference_id}")
+
+@app.get("/api/worker/profile/{reference_id}")
+async def get_worker_profile(reference_id: str):
+    return await go_microservice_request("GET", f"/worker/profile/{reference_id}")
