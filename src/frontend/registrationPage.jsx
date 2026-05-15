@@ -26,6 +26,9 @@ const Register = () => {
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState("");
   const [copied, setCopied] = useState({});
+  const [mobile, setMobile] = useState("");
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("worker");
 
   // ── ZIP Upload: JSZip se frontend par extract karo ──
   const handleZipUpload = async (file) => {
@@ -128,10 +131,25 @@ const Register = () => {
       setMessageType("error");
       return;
     }
+    if (mobile.length !== 10) {
+      setMessage("10-digit mobile number daalo");
+      setMessageType("error");
+      return;
+    }
     setLoading(true);
     setMessage("");
     try {
-      const result = await registerUser({ ekycKey, ekycXmlData, password, workerData: extractedData });
+      const result = await registerUser({
+        reference_id: ekycKey,
+        name: extractedData?.name || '',
+        dob: extractedData?.dob || '',
+        gender: extractedData?.gender || 'M',
+        state: extractedData?.state || '',
+        mobile: mobile,
+        email: email,
+        password: password,
+        role: role,
+      });
       if (result.success) {
         setStep(3);
       } else {
@@ -154,7 +172,7 @@ const Register = () => {
   const resetFlow = () => {
     setStep(1); setZipFile(null); setEkycKey(""); setEkycXmlData("");
     setExtractedData(null); setPassword(""); setConfirmPassword("");
-    setMessage(""); setMessageType("");
+    setMessage(""); setMessageType(""); setMobile(""); setEmail("");
   };
 
   const passwordStrength = () => {
@@ -327,6 +345,42 @@ const Register = () => {
               </div>
             )}
 
+            {/* Mobile + Email + Role */}
+            <div style={{marginBottom:"14px"}}>
+              <label style={{color:"rgba(255,255,255,0.5)",fontSize:"11px",letterSpacing:"0.5px",display:"block",marginBottom:"6px"}}>MOBILE NUMBER</label>
+              <div style={{position:"relative"}}>
+                <span style={{position:"absolute",left:"14px",top:"50%",transform:"translateY(-50%)",color:"rgba(255,255,255,0.7)",fontSize:"14px",fontWeight:"600"}}>🇮🇳 +91</span>
+                <input className="input-field" type="tel" maxLength="10" value={mobile}
+                  onChange={(e)=>{setMobile(e.target.value.replace(/\D/g,"")); setMessage("");}}
+                  placeholder="Mobile Number" style={{paddingLeft:"78px",letterSpacing:"2px"}}/>
+              </div>
+            </div>
+            <div style={{marginBottom:"14px"}}>
+              <label style={{color:"rgba(255,255,255,0.5)",fontSize:"11px",letterSpacing:"0.5px",display:"block",marginBottom:"6px"}}>EMAIL (OPTIONAL)</label>
+              <div style={{position:"relative"}}>
+                <span style={{position:"absolute",left:"14px",top:"50%",transform:"translateY(-50%)",fontSize:"17px",opacity:0.7}}>📧</span>
+                <input className="input-field" type="email" value={email}
+                  onChange={(e)=>{setEmail(e.target.value); setMessage("");}}
+                  placeholder="Email address" style={{paddingLeft:"44px"}}/>
+              </div>
+            </div>
+            <div style={{marginBottom:"18px"}}>
+              <label style={{color:"rgba(255,255,255,0.5)",fontSize:"11px",letterSpacing:"0.5px",display:"block",marginBottom:"8px"}}>ROLE SELECT KARO</label>
+              <div style={{display:"flex",gap:"10px"}}>
+                {[{val:"worker",label:"👷 Worker",desc:"Main kaam karta hoon"},{val:"contractor",label:"🏢 Contractor",desc:"Main workers manage karta hoon"}].map(r=>(
+                  <button key={r.val} onClick={()=>setRole(r.val)} style={{
+                    flex:1,padding:"12px",borderRadius:"12px",cursor:"pointer",transition:"all 0.2s",textAlign:"left",
+                    background:role===r.val?"rgba(255,255,255,0.2)":"rgba(255,255,255,0.06)",
+                    border:role===r.val?"1.5px solid rgba(255,255,255,0.5)":"1.5px solid rgba(255,255,255,0.15)",
+                    color:"white",
+                  }}>
+                    <div style={{fontSize:"14px",fontWeight:"600"}}>{r.label}</div>
+                    <div style={{fontSize:"11px",opacity:0.5,marginTop:"2px"}}>{r.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {/* Password */}
             <div style={{marginBottom:"12px"}}>
               <div style={{position:"relative"}}>
@@ -366,7 +420,7 @@ const Register = () => {
             )}
 
             <button className="btn-success" onClick={handleRegister}
-              disabled={loading||password.length<8||password!==confirmPassword} style={{marginTop:"8px"}}>
+              disabled={loading||password.length<8||password!==confirmPassword||mobile.length!==10} style={{marginTop:"8px"}}>
               {loading?(
                 <><svg className="spin" width="18" height="18" viewBox="0 0 24 24" fill="none">
                   <circle cx="12" cy="12" r="10" stroke="white" strokeWidth="3" strokeOpacity="0.3"/>
