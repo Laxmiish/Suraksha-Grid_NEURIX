@@ -23,6 +23,8 @@ export default function LoginPage() {
       const result = await loginUser({ mobile, password, role });
       if (result.success) {
         localStorage.setItem("sg_token", result.token);
+        localStorage.setItem("sg_ref_id", result.reference_id || '');
+        localStorage.setItem("sg_name", result.name || '');
         localStorage.setItem("sg_role", role);
         localStorage.setItem("sg_mobile", mobile);
         navigate(role === "worker" ? "/dashboard" : "/admin");
