@@ -1,6 +1,7 @@
 // src/frontend/WorkerDashboard.jsx
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { getWorkerProfile, getWorkerBenefits, getUnionHistory, getLabourBoards } from "../api/api.jsx";
 
 const mockWorker = {
   name: "Ramesh Kumar",
@@ -91,6 +92,67 @@ export default function WorkerDashboard() {
   const [activeTab, setActiveTab] = useState("Overview");
   const [expandedHistory, setExpandedHistory] = useState(null);
   const [expandedBoard, setExpandedBoard] = useState(null);
+  const [workerData, setWorkerData] = useState(null);
+  const [benefitsData, setBenefitsData] = useState(null);
+  const [unionsData, setUnionsData] = useState(null);
+  const [boardsData, setBoardsData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const refId = localStorage.getItem('sg_ref_id');
+    if (!refId) { setLoading(false); return; }
+    
+    const fetchAll = async () => {
+      const [profile, benefits, unions, boards] = await Promise.all([
+        getWorkerProfile(refId),
+        getWorkerBenefits(refId),
+        getUnionHistory(refId),
+        getLabourBoards(refId),
+      ]);
+      if (profile) setWorkerData(profile);
+      if (benefits) setBenefitsData(benefits);
+      if (unions) setUnionsData(unions);
+      if (boards) setBoardsData(boards);
+      setLoading(false);
+    };
+    fetchAll();
+  }, []);
+
+  const worker = workerData ? {
+    name: workerData.name,
+    aadhaar: 'XXXX XXXX ' + (workerData.reference_id || '').slice(-4),
+    state: workerData.state || 'Unknown',
+    status: 'Active',
+    since: workerData.dob ? new Date(workerData.dob).getFullYear().toString() : '2019',
+    photo: '👷',
+    ekycKey: workerData.reference_id || '',
+    totalDays: workerData.total_days_worked || 0,
+  } : mockWorker;
+
+  const unions = unionsData?.unions?.length ? unionsData.unions.map((u, i) => ({
+    name: u.union_name, from: u.from, to: u.to, state: u.state,
+    benefit: u.benefit_summary, icon: i === 0 ? '🏛️' : i === 1 ? '🏢' : '⚖️',
+  })) : mockUnions;
+
+  const labourBoards = boardsData?.labour_boards?.length ? boardsData.labour_boards.map((b, i) => ({
+    name: b.board_name, shortName: b.short_name, state: b.state,
+    regNumber: b.reg_number, from: b.from, to: b.to, status: b.status,
+    icon: i === 0 ? '🏛️' : i === 1 ? '🏢' : '🇮🇳',
+    color: b.status === 'Active' ? '#16A34A' : '#6366F1',
+    benefits: [], contributions: b.contributions, contact: b.contact,
+    website: b.website, certStatus: b.cert_status,
+  })) : mockLabourBoards;
+
+  const benefits = benefitsData?.eligible_schemes?.length ? benefitsData.eligible_schemes.map((s, i) => {
+    const icons = ['💰', '🏥', '🏠', '👶', '🎁', '📚'];
+    const colors = ['#16A34A', '#2563EB', '#F59E0B', '#8B5CF6', '#F97316', '#06B6D4'];
+    return {
+      name: s.benefit_name, status: 'Eligible', amount: '', icon: icons[i % icons.length],
+      color: colors[i % colors.length], desc: s.conditions || s.type || '',
+    };
+  }) : mockBenefits;
+
+  const seniorityStats = benefitsData?.seniority_stats || null;
 
   return (
     <div style={{
@@ -192,20 +254,20 @@ export default function WorkerDashboard() {
           alignItems:"center", flexWrap:"wrap",
         }}>
           <div style={{ width:"72px", height:"72px", borderRadius:"18px", background:"rgba(255,255,255,0.15)", border:"2px solid rgba(255,255,255,0.3)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"36px", flexShrink:0 }}>
-            {mockWorker.photo}
+            {worker.photo}
           </div>
           <div style={{ flex:1, minWidth:"200px" }}>
             <div style={{ display:"flex", alignItems:"center", gap:"10px", flexWrap:"wrap" }}>
-              <h2 style={{ color:"white", fontSize:"20px", fontWeight:"800", margin:0 }}>{mockWorker.name}</h2>
+              <h2 style={{ color:"white", fontSize:"20px", fontWeight:"800", margin:0 }}>{worker.name}</h2>
               <span className="badge" style={{ background:"rgba(22,163,74,0.25)", color:"#86efac", border:"1px solid rgba(22,163,74,0.4)" }}>
-                ✅ {mockWorker.status}
+                ✅ {worker.status}
               </span>
             </div>
             <p style={{ color:"rgba(255,255,255,0.55)", fontSize:"13px", margin:"4px 0 0" }}>
-              🪪 {mockWorker.aadhaar} &nbsp;•&nbsp; 📍 {mockWorker.state} &nbsp;•&nbsp; 🗓️ Worker since {mockWorker.since}
+              🪪 {worker.aadhaar} &nbsp;•&nbsp; 📍 {worker.state} &nbsp;•&nbsp; 🗓️ Worker since {worker.since}
             </p>
             <p style={{ color:"rgba(255,255,255,0.4)", fontSize:"12px", margin:"4px 0 0", fontFamily:"monospace" }}>
-              eKYC: {mockWorker.ekycKey}
+              eKYC: {worker.ekycKey}
             </p>
           </div>
           <div style={{ display:"flex", gap:"10px", flexWrap:"wrap" }}>
@@ -364,7 +426,7 @@ export default function WorkerDashboard() {
                 ℹ️ Aap 3 unions ke member rahe hain. Har union ne alag-alag benefits provide kiye hain.
               </p>
             </div>
-            {mockUnions.map((union, i) => (
+            {unions.map((union, i) => (
               <div key={i} className="card">
                 <div style={{ display:"flex", gap:"14px", alignItems:"flex-start" }}>
                   <div style={{ width:"48px", height:"48px", borderRadius:"14px", background:"rgba(255,255,255,0.12)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"24px", flexShrink:0 }}>
@@ -423,7 +485,7 @@ export default function WorkerDashboard() {
             </div>
 
             {/* Labour Board Cards */}
-            {mockLabourBoards.map((board, i) => (
+            {labourBoards.map((board, i) => (
               <div key={i} className="board-card" style={{ borderLeft:`4px solid ${board.color}` }}>
 
                 {/* Card Header — always visible */}
@@ -533,7 +595,7 @@ export default function WorkerDashboard() {
         {activeTab === "Benefits" && (
           <div className="fade-up">
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(240px, 1fr))", gap:"14px" }}>
-              {mockBenefits.map((b, i) => (
+              {benefits.map((b, i) => (
                 <div key={i} className="benefit-card">
                   <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:"12px" }}>
                     <div style={{ width:"44px", height:"44px", borderRadius:"12px", background:`${b.color}22`, border:`1px solid ${b.color}44`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:"22px" }}>
