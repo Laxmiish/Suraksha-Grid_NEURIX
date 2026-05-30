@@ -5,35 +5,28 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/robfig/cron/v3"
 )
 
-var commonDB *sql.DB
-var contractorDB *sql.DB
-var homeLaborDB *sql.DB
+var db *sql.DB
 
 func main() {
 	var err error
-	username, password, host := "root", "root", "127.0.0.1"
-	
-	dsn1 := fmt.Sprintf("%s:%s@tcp(%s:3306)/common_db?parseTime=true", username, password, host)
-	dsn2 := fmt.Sprintf("%s:%s@tcp(%s:3308)/contractors_master?parseTime=true", username, password, host)
-	dsn3 := fmt.Sprintf("%s:%s@tcp(%s:3307)/home_labor_db?parseTime=true", username, password, host)
+	username := getEnv("DB_USER", "root")
+	password := getEnv("DB_PASS", "root")
+	host := getEnv("DB_HOST", "127.0.0.1")
+	port := getEnv("DB_PORT", "3306")
+	dbName := getEnv("DB_NAME", "suraksha_db")
 
-	commonDB, err = sql.Open("mysql", dsn1)
-	if err != nil || commonDB.Ping() != nil { log.Fatal("Common DB failed:", err) }
-	defer commonDB.Close()
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true", username, password, host, port, dbName)
 
-	contractorDB, err = sql.Open("mysql", dsn2)
-	if err != nil || contractorDB.Ping() != nil { log.Fatal("Contractor DB failed:", err) }
-	defer contractorDB.Close()
-
-	homeLaborDB, err = sql.Open("mysql", dsn3)
-	if err != nil || homeLaborDB.Ping() != nil { log.Fatal("Home Labor DB failed:", err) }
-	defer homeLaborDB.Close()
+	db, err = sql.Open("mysql", dsn)
+	if err != nil || db.Ping() != nil { log.Fatal("Database connection failed:", err) }
+	defer db.Close()
 
 	c := cron.New()
 	c.AddFunc("0 0 * * *", runDailyAttendancePulse)
@@ -53,6 +46,13 @@ func main() {
 	r.Run(":8080")
 }
 
+func getEnv(key, fallback string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
+	}
+	return fallback
+}
+
 // 1. Unified Registration (Now saving DOB and Gender from the XML)
 func registerHandler(c *gin.Context) {
 	var data map[string]interface{}
@@ -65,7 +65,7 @@ func registerHandler(c *gin.Context) {
 			  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 100) 
 			  ON DUPLICATE KEY UPDATE phone=?, email=?, password_hash=?, role=?`
 			  
-	_, err := commonDB.Exec(query, 
+	_, err := db.Exec(query, 
 		data["reference_id"], data["name"], data["dob"], data["gender"], 
 		data["mobile"], data["email"], data["password"], data["role"], data["state"],
 		data["mobile"], data["email"], data["password"], data["role"])
@@ -84,7 +84,7 @@ func loginHandler(c *gin.Context) {
 
 	var refID, hash, role, name string
 	query := `SELECT reference_id, name, password_hash, role FROM users WHERE phone=?`
-	err := commonDB.QueryRow(query, data["mobile"]).Scan(&refID, &name, &hash, &role)
+	err := db.QueryRow(query, data["mobile"]).Scan(&refID, &name, &hash, &role)
 	
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -103,7 +103,7 @@ func getEligibleBenefits(c *gin.Context) {
 
 	var totalDays int
 	queryDays := `SELECT COUNT(*) FROM attendance_logs WHERE worker_reference_id=? AND status='PRESENT'`
-	err := contractorDB.QueryRow(queryDays, refID).Scan(&totalDays)
+	err := db.QueryRow(queryDays, refID).Scan(&totalDays)
 	if err != nil { totalDays = 0 }
 
 	// 90 days of logged work = 1 year of statutory BOCW eligibility
@@ -111,12 +111,12 @@ func getEligibleBenefits(c *gin.Context) {
 
 	var workerState string
 	queryState := `SELECT state FROM users WHERE reference_id=?`
-	err = commonDB.QueryRow(queryState, refID).Scan(&workerState)
+	err = db.QueryRow(queryState, refID).Scan(&workerState)
 	if err != nil { workerState = "Uttar Pradesh" }
 
 	queryBenefits := `SELECT benifitname, benifittype, minimumyear, conditions 
 					  FROM benefits WHERE state=? AND minimumyear <= ?`
-	rows, err := commonDB.Query(queryBenefits, workerState, seniorityYears)
+	rows, err := db.Query(queryBenefits, workerState, seniorityYears)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch benefits"})
 		return
@@ -149,7 +149,7 @@ func markAbsent(c *gin.Context) {
 	c.ShouldBindJSON(&data)
 
 	query := `UPDATE attendance_logs SET status='ABSENT' WHERE jobsite_id=? AND worker_reference_id=? AND date=?`
-	_, err := contractorDB.Exec(query, data["jobsite_id"], data["worker_reference_id"], data["date"])
+	_, err := db.Exec(query, data["jobsite_id"], data["worker_reference_id"], data["date"])
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update attendance"})
 		return
@@ -157,11 +157,11 @@ func markAbsent(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "Marked Absent"})
 }
 
-// 5. Union History from Home Labor DB
+// 5. Union History
 func getUnionHistory(c *gin.Context) {
 	refID := c.Param("ref_id")
 	query := `SELECT union_name, state, from_date, to_date, benefit_summary, status FROM union_memberships WHERE worker_reference_id=? ORDER BY id`
-	rows, err := homeLaborDB.Query(query, refID)
+	rows, err := db.Query(query, refID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch union history"})
 		return
@@ -180,11 +180,11 @@ func getUnionHistory(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"unions": unions})
 }
 
-// 6. Labour Board Registrations from Home Labor DB
+// 6. Labour Board Registrations
 func getLabourBoards(c *gin.Context) {
 	refID := c.Param("ref_id")
 	query := `SELECT board_name, short_name, state, reg_number, from_date, to_date, status, contributions, contact, website, cert_status FROM labour_board_registrations WHERE worker_reference_id=? ORDER BY id`
-	rows, err := homeLaborDB.Query(query, refID)
+	rows, err := db.Query(query, refID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch labour boards"})
 		return
@@ -205,13 +205,13 @@ func getLabourBoards(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"labour_boards": boards})
 }
 
-// 7. Worker Profile (cross-DB: user info from commonDB + days worked from contractorDB)
+// 7. Worker Profile
 func getWorkerProfile(c *gin.Context) {
 	refID := c.Param("ref_id")
 	var name, dob, gender, state, phone, email, role string
 	var rating int
 	query := `SELECT name, dob, gender, state, phone, email, role, rating FROM users WHERE reference_id=?`
-	err := commonDB.QueryRow(query, refID).Scan(&name, &dob, &gender, &state, &phone, &email, &role, &rating)
+	err := db.QueryRow(query, refID).Scan(&name, &dob, &gender, &state, &phone, &email, &role, &rating)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Worker not found"})
 		return
@@ -219,7 +219,7 @@ func getWorkerProfile(c *gin.Context) {
 	// Get total days worked
 	var totalDays int
 	daysQuery := `SELECT COUNT(*) FROM attendance_logs WHERE worker_reference_id=? AND status='PRESENT'`
-	contractorDB.QueryRow(daysQuery, refID).Scan(&totalDays)
+	db.QueryRow(daysQuery, refID).Scan(&totalDays)
 
 	c.JSON(http.StatusOK, gin.H{
 		"reference_id": refID, "name": name, "dob": dob, "gender": gender,
@@ -230,7 +230,7 @@ func getWorkerProfile(c *gin.Context) {
 
 func runDailyAttendancePulse() {
 	log.Println("Running Daily Attendance Pulse (Default-Present)...")
-	rows, err := contractorDB.Query("SELECT jobsite_id, worker_reference_id, daily_wage FROM active_links WHERE active = 1")
+	rows, err := db.Query("SELECT jobsite_id, worker_reference_id, daily_wage FROM active_links WHERE active = 1")
 	if err != nil { return }
 	defer rows.Close()
 
@@ -240,7 +240,7 @@ func runDailyAttendancePulse() {
 		var workerID string
 		var wage float64
 		rows.Scan(&jobsiteID, &workerID, &wage)
-		contractorDB.Exec(insertQuery, jobsiteID, workerID, wage)
+		db.Exec(insertQuery, jobsiteID, workerID, wage)
 	}
 	log.Println("Pulse Complete.")
 }
