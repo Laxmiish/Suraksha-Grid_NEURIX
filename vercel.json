@@ -1,4 +1,12 @@
 {
+  "functions": {
+    "api/go/index.go": {
+      "includeFiles": "suraksha.db"
+    },
+    "api/index.py": {
+      "includeFiles": "suraksha.db"
+    }
+  },
   "rewrites": [
     {
       "source": "/api/go/(.*)",

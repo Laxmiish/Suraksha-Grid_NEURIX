@@ -1,7 +1,7 @@
 import logging, jwt, httpx, zipfile, io, os
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
 import basemodels
@@ -20,20 +20,15 @@ secret_key = 'heK4w-rrU72qIuGNMerPm762yPayLkvRisjsU-R9ZTs'
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 logging.basicConfig(level=logging.INFO)
 
-# Go Engine URL
-# On Vercel, we call the absolute URL of the Go function
-# In local development (e.g. `vercel dev`), it's on localhost:3000
-VERCEL_URL = os.environ.get("VERCEL_URL", "")
-if VERCEL_URL:
-    GO_API_BASE = f"https://{VERCEL_URL}"
-else:
-    GO_API_BASE = "http://localhost:3000"
-
 def get_password_hash(password):
     return pwd_context.hash(password)
 
-async def go_microservice_request(method: str, endpoint: str, data: dict = None):
-    url = f"{GO_API_BASE}/api/go{endpoint}"
+async def go_microservice_request(request: Request, method: str, endpoint: str, data: dict = None):
+    # Construct the absolute URL using the incoming request's base URL
+    # This works identically on Vercel and locally
+    base_url = str(request.base_url).rstrip('/')
+    url = f"{base_url}/api/go{endpoint}"
+    
     async with httpx.AsyncClient() as client:
         try:
             if method == "POST":
@@ -42,12 +37,12 @@ async def go_microservice_request(method: str, endpoint: str, data: dict = None)
                 response = await client.get(url, timeout=10.0)
                 
             if response.status_code >= 400:
-                logging.error(f"Go API Error: {response.text}")
+                logging.error(f"Go API Error ({response.status_code}): {response.text}")
                 raise HTTPException(status_code=response.status_code, detail=response.json())
             return response.json()
         except httpx.RequestError as e:
             logging.error(f"Request error calling Go API at {url}: {e}")
-            raise HTTPException(status_code=500, detail="Internal Server Error calling Go microservice")
+            raise HTTPException(status_code=500, detail=f"Internal Server Error calling Go microservice: {str(e)}")
 
 @app.post("/api/ekyc/upload", response_model=basemodels.EKycResponse)
 async def process_ekyc_zip(file: UploadFile = File(...), share_code: str = Form(...)):
@@ -102,24 +97,27 @@ async def process_ekyc_zip(file: UploadFile = File(...), share_code: str = Form(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/register")
-async def register(user_data: basemodels.RegisterRequest):
+async def register(request: Request, user_data: basemodels.RegisterRequest):
     hashed_pwd = get_password_hash(user_data.password)
     payload = user_data.model_dump()
     payload['password'] = hashed_pwd 
     
-    result = await go_microservice_request("POST", "/register", payload)
+    result = await go_microservice_request(request, "POST", "/register", payload)
     return {"success": True, "message": "Registration successful", "data": result}
 
 @app.post("/api/login")
-async def login(credentials: basemodels.LoginRequest):
+async def login(request: Request, credentials: basemodels.LoginRequest):
     try:
-        go_response = await go_microservice_request("POST", "/login", credentials.model_dump())
+        go_response = await go_microservice_request(request, "POST", "/login", credentials.model_dump())
         stored_hash = go_response.get("password_hash")
+        
+        if not stored_hash:
+            return {"success": False, "message": "Invalid user credentials"}
         
         if not pwd_context.verify(credentials.password, stored_hash):
             return {"success": False, "message": "Invalid Password"}
             
-        if go_response["role"] != credentials.role:
+        if go_response.get("role") != credentials.role:
             return {"success": False, "message": f"User is not registered as a {credentials.role}"}
             
         expire = datetime.now(timezone.utc) + timedelta(hours=24)
@@ -129,21 +127,25 @@ async def login(credentials: basemodels.LoginRequest):
             "success": True, "token": token, 
             "reference_id": go_response["reference_id"], "name": go_response["name"]
         }
-    except HTTPException:
-        return {"success": False, "message": "User not found or Server Error"}
+    except HTTPException as e:
+        if e.status_code == 404:
+            return {"success": False, "message": "User not found"}
+        return {"success": False, "message": f"Server Error: {e.detail}"}
+    except Exception as e:
+        return {"success": False, "message": f"Unknown Error: {str(e)}"}
 
 @app.get("/api/worker/benefits/{reference_id}")
-async def get_worker_benefits(reference_id: str):
-    return await go_microservice_request("GET", f"/worker/benefits/{reference_id}")
+async def get_worker_benefits(request: Request, reference_id: str):
+    return await go_microservice_request(request, "GET", f"/worker/benefits/{reference_id}")
 
 @app.get("/api/worker/union-history/{reference_id}")
-async def get_union_history(reference_id: str):
-    return await go_microservice_request("GET", f"/worker/union-history/{reference_id}")
+async def get_union_history(request: Request, reference_id: str):
+    return await go_microservice_request(request, "GET", f"/worker/union-history/{reference_id}")
 
 @app.get("/api/worker/labour-boards/{reference_id}")
-async def get_labour_boards(reference_id: str):
-    return await go_microservice_request("GET", f"/worker/labour-boards/{reference_id}")
+async def get_labour_boards(request: Request, reference_id: str):
+    return await go_microservice_request(request, "GET", f"/worker/labour-boards/{reference_id}")
 
 @app.get("/api/worker/profile/{reference_id}")
-async def get_worker_profile(reference_id: str):
-    return await go_microservice_request("GET", f"/worker/profile/{reference_id}")
+async def get_worker_profile(request: Request, reference_id: str):
+    return await go_microservice_request(request, "GET", f"/worker/profile/{reference_id}")
