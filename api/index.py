@@ -4,8 +4,45 @@ from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
-import basemodels
+from pydantic import BaseModel
+from typing import Optional
 
+# --- Base Models ---
+class AddressDetails(BaseModel):
+    care_of: Optional[str] = None
+    house: Optional[str] = None
+    street: Optional[str] = None
+    locality: Optional[str] = None
+    vtc: Optional[str] = None
+    district: Optional[str] = None
+    state: Optional[str] = None
+    pincode: Optional[str] = None
+
+class EKycResponse(BaseModel):
+    reference_id: str
+    name: str
+    dob: str
+    gender: str
+    address: AddressDetails
+    photo_base64: Optional[str] = None
+
+class RegisterRequest(BaseModel):
+    reference_id: str
+    name: str
+    dob: str
+    gender: str
+    state: str
+    mobile: str
+    email: str
+    password: str
+    role: str
+
+class LoginRequest(BaseModel):
+    mobile: str
+    password: str
+    role: str
+
+# --- App Setup ---
 # On Vercel, the app is expected to be named `app`
 app = FastAPI()
 
@@ -44,7 +81,7 @@ async def go_microservice_request(request: Request, method: str, endpoint: str, 
             logging.error(f"Request error calling Go API at {url}: {e}")
             raise HTTPException(status_code=500, detail=f"Internal Server Error calling Go microservice: {str(e)}")
 
-@app.post("/api/ekyc/upload", response_model=basemodels.EKycResponse)
+@app.post("/api/ekyc/upload", response_model=EKycResponse)
 async def process_ekyc_zip(file: UploadFile = File(...), share_code: str = Form(...)):
     if not file.filename.endswith('.zip'):
         raise HTTPException(status_code=400, detail="Must be a ZIP file")
@@ -73,14 +110,14 @@ async def process_ekyc_zip(file: UploadFile = File(...), share_code: str = Form(
         poa = uid_data.find('.//*[local-name()="Poa"]')
         pht = uid_data.find('.//*[local-name()="Pht"]')
 
-        address = basemodels.AddressDetails(
+        address = AddressDetails(
             care_of=poa.attrib.get('co'), house=poa.attrib.get('house'),
             street=poa.attrib.get('street'), locality=poa.attrib.get('loc'),
             vtc=poa.attrib.get('vtc'), district=poa.attrib.get('dist'),
             state=poa.attrib.get('state'), pincode=poa.attrib.get('pc')
         )
 
-        return basemodels.EKycResponse(
+        return EKycResponse(
             reference_id=root.attrib.get('referenceId', ''),
             name=poi.attrib.get('name', ''),
             dob=poi.attrib.get('dob', ''),
@@ -97,7 +134,7 @@ async def process_ekyc_zip(file: UploadFile = File(...), share_code: str = Form(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/register")
-async def register(request: Request, user_data: basemodels.RegisterRequest):
+async def register(request: Request, user_data: RegisterRequest):
     hashed_pwd = get_password_hash(user_data.password)
     payload = user_data.model_dump()
     payload['password'] = hashed_pwd 
@@ -106,7 +143,7 @@ async def register(request: Request, user_data: basemodels.RegisterRequest):
     return {"success": True, "message": "Registration successful", "data": result}
 
 @app.post("/api/login")
-async def login(request: Request, credentials: basemodels.LoginRequest):
+async def login(request: Request, credentials: LoginRequest):
     try:
         go_response = await go_microservice_request(request, "POST", "/login", credentials.model_dump())
         stored_hash = go_response.get("password_hash")
