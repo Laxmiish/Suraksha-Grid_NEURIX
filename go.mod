@@ -42,3 +42,6 @@ require (
 	golang.org/x/tools v0.34.0 // indirect
 	google.golang.org/protobuf v1.36.9 // indirect
 )
+
+require modernc.org/sqlite v1.28.0
+

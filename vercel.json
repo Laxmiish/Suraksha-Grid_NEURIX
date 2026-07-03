@@ -1,6 +1,14 @@
 {
   "rewrites": [
     {
+      "source": "/api/go/(.*)",
+      "destination": "/api/go/index.go"
+    },
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/index.py"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

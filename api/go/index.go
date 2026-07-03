@@ -1,59 +1,61 @@
-package main
+package api
 
 import (
 	"database/sql"
-	"fmt"
-	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"github.com/gin-gonic/gin"
-	_ "github.com/go-sql-driver/mysql"
-	"github.com/robfig/cron/v3"
+	_ "modernc.org/sqlite"
 )
 
 var db *sql.DB
+var r *gin.Engine
 
-func main() {
+func init() {
 	var err error
-	username := getEnv("DB_USER", "root")
-	password := getEnv("DB_PASS", "root")
-	host := getEnv("DB_HOST", "127.0.0.1")
-	port := getEnv("DB_PORT", "3306")
-	dbName := getEnv("DB_NAME", "suraksha_db")
-
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true", username, password, host, port, dbName)
-
-	db, err = sql.Open("mysql", dsn)
-	if err != nil || db.Ping() != nil { log.Fatal("Database connection failed:", err) }
-	defer db.Close()
-
-	c := cron.New()
-	c.AddFunc("0 0 * * *", runDailyAttendancePulse)
-	c.Start()
-
-	r := gin.Default()
-
-	r.POST("/register", registerHandler)
-	r.POST("/login", loginHandler)
-	r.GET("/worker/benefits/:ref_id", getEligibleBenefits)
-	r.POST("/contractor/mark-absent", markAbsent)
-	r.GET("/worker/union-history/:ref_id", getUnionHistory)
-	r.GET("/worker/labour-boards/:ref_id", getLabourBoards)
-	r.GET("/worker/profile/:ref_id", getWorkerProfile)
-
-	log.Println("Go Engine running intensely on port 8080")
-	r.Run(":8080")
-}
-
-func getEnv(key, fallback string) string {
-	if value, exists := os.LookupEnv(key); exists {
-		return value
+	
+	// Vercel serverless functions load from the root of the project.
+	// Try to find suraksha.db in a few locations
+	dbPath := "suraksha.db"
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		dbPath = filepath.Join("..", "suraksha.db")
 	}
-	return fallback
+
+	db, err = sql.Open("sqlite", dbPath)
+	if err != nil {
+		// Just log it, we'll return 500 on queries if it fails
+		println("Error opening sqlite DB:", err.Error())
+	} else {
+		// Enable write-ahead logging for better concurrency if writable
+		db.Exec("PRAGMA journal_mode=WAL;")
+	}
+
+	// We disable Gin's debug output for production
+	gin.SetMode(gin.ReleaseMode)
+	r = gin.Default()
+
+	// Vercel routes all /api/go requests here. 
+	// We handle the proxy routes from Python
+	apiGroup := r.Group("/api/go")
+	{
+		apiGroup.POST("/register", registerHandler)
+		apiGroup.POST("/login", loginHandler)
+		apiGroup.GET("/worker/benefits/:ref_id", getEligibleBenefits)
+		apiGroup.POST("/contractor/mark-absent", markAbsent)
+		apiGroup.GET("/worker/union-history/:ref_id", getUnionHistory)
+		apiGroup.GET("/worker/labour-boards/:ref_id", getLabourBoards)
+		apiGroup.GET("/worker/profile/:ref_id", getWorkerProfile)
+	}
 }
 
-// 1. Unified Registration (Now saving DOB and Gender from the XML)
+// Handler is the Vercel Serverless Function entrypoint
+func Handler(w http.ResponseWriter, req *http.Request) {
+	r.ServeHTTP(w, req)
+}
+
+// 1. Unified Registration
 func registerHandler(c *gin.Context) {
 	var data map[string]interface{}
 	if err := c.ShouldBindJSON(&data); err != nil {
@@ -63,15 +65,14 @@ func registerHandler(c *gin.Context) {
 
 	query := `INSERT INTO users (reference_id, name, dob, gender, phone, email, password_hash, role, state, rating) 
 			  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 100) 
-			  ON DUPLICATE KEY UPDATE phone=?, email=?, password_hash=?, role=?`
+			  ON CONFLICT(reference_id) DO UPDATE SET phone=excluded.phone, email=excluded.email, password_hash=excluded.password_hash, role=excluded.role`
 			  
 	_, err := db.Exec(query, 
 		data["reference_id"], data["name"], data["dob"], data["gender"], 
-		data["mobile"], data["email"], data["password"], data["role"], data["state"],
-		data["mobile"], data["email"], data["password"], data["role"])
+		data["mobile"], data["email"], data["password"], data["role"], data["state"])
 		
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to register user"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to register user", "details": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "success"})
@@ -90,7 +91,7 @@ func loginHandler(c *gin.Context) {
 		if err == sql.ErrNoRows {
 			c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
 		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error", "details": err.Error()})
 		}
 		return
 	}
@@ -132,6 +133,7 @@ func getEligibleBenefits(c *gin.Context) {
 			"benefit_name": name, "type": bType, "years_required": minYear, "conditions": conditions,
 		})
 	}
+	if eligibleBenefits == nil { eligibleBenefits = []map[string]interface{}{} }
 
 	c.JSON(http.StatusOK, gin.H{
 		"seniority_stats": map[string]interface{}{
@@ -226,21 +228,4 @@ func getWorkerProfile(c *gin.Context) {
 		"state": state, "phone": phone, "email": email, "role": role,
 		"rating": rating, "total_days_worked": totalDays,
 	})
-}
-
-func runDailyAttendancePulse() {
-	log.Println("Running Daily Attendance Pulse (Default-Present)...")
-	rows, err := db.Query("SELECT jobsite_id, worker_reference_id, daily_wage FROM active_links WHERE active = 1")
-	if err != nil { return }
-	defer rows.Close()
-
-	insertQuery := `INSERT IGNORE INTO attendance_logs (jobsite_id, worker_reference_id, date, status, payout_amount) VALUES (?, ?, CURDATE(), 'PRESENT', ?)`
-	for rows.Next() {
-		var jobsiteID int
-		var workerID string
-		var wage float64
-		rows.Scan(&jobsiteID, &workerID, &wage)
-		db.Exec(insertQuery, jobsiteID, workerID, wage)
-	}
-	log.Println("Pulse Complete.")
 }
