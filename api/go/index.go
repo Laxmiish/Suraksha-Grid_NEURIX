@@ -5,10 +5,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	_ "embed"
 
 	"github.com/gin-gonic/gin"
 	_ "modernc.org/sqlite"
 )
+
+//go:embed suraksha.db
+var dbBytes []byte
 
 var db *sql.DB
 var r *gin.Engine
@@ -16,16 +20,16 @@ var r *gin.Engine
 func init() {
 	var err error
 	
-	// Vercel serverless functions load from the root of the project.
-	// Try to find suraksha.db in a few locations
-	dbPath := "suraksha.db"
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		dbPath = filepath.Join("..", "suraksha.db")
+	// Vercel serverless functions have a read-only filesystem except for /tmp.
+	// We extract the embedded database to /tmp so SQLite can use it.
+	dbPath := filepath.Join(os.TempDir(), "suraksha.db")
+	err = os.WriteFile(dbPath, dbBytes, 0644)
+	if err != nil {
+		println("Failed to write embedded database to /tmp:", err.Error())
 	}
 
 	db, err = sql.Open("sqlite", dbPath)
 	if err != nil {
-		// Just log it, we'll return 500 on queries if it fails
 		println("Error opening sqlite DB:", err.Error())
 	} else {
 		// Enable write-ahead logging for better concurrency if writable
@@ -37,7 +41,6 @@ func init() {
 	r = gin.Default()
 
 	// Vercel routes all /api/go requests here. 
-	// We handle the proxy routes from Python
 	apiGroup := r.Group("/api/go")
 	{
 		apiGroup.POST("/register", registerHandler)
